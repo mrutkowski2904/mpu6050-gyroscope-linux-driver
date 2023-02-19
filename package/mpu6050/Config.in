@@ -1,0 +1,5 @@
+config BR2_PACKAGE_MPU6050_MODULE
+        bool "mpu6050"
+        depends on BR2_LINUX_KERNEL
+        help
+                Custom driver for MPU6050 gryro-accelerometer

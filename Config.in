@@ -1,0 +1,2 @@
+# Name set in external.desc
+source "$BR2_EXTERNAL_CUSTOM_PATH/package/mpu6050/Config.in"

@@ -1,0 +1,7 @@
+&i2c2 {
+    mrmpu: mrmpu@68 {
+        compatible = "org,mrmpu";
+        reg = <0x68>;
+        status = "okay";
+    };
+};
