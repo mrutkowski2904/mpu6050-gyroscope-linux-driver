@@ -3,8 +3,8 @@
 
 #include <linux/device.h>
 #include <linux/i2c.h>
-#include <linux/wait.h>
 #include <linux/kthread.h>
+#include <linux/rwlock.h>
 
 struct driver_private_data
 {
@@ -19,6 +19,7 @@ struct device_private_data
     struct device *device;
     struct task_struct *device_thread;
 
+    rwlock_t data_rwlock; 
     u16 acceleration[3];
     u16 gyroscope[3];
 };

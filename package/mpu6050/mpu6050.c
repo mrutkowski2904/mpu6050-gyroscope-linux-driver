@@ -71,9 +71,12 @@ struct i2c_driver mrmpu6050_platform_driver = {
 ssize_t gyroscope_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
     struct device_private_data *dev_data;
+
     dev_data = dev_get_drvdata(dev);
 
-    dev_info(dev, "test: %d, %d, %d\n", dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
+    read_lock(&dev_data->data_rwlock);
+    dev_info(dev, "gyro: %d, %d, %d\n", dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
+    read_unlock(&dev_data->data_rwlock);
 
     /* WIP */
     return 0;
@@ -84,7 +87,9 @@ ssize_t acceleration_show(struct device *dev, struct device_attribute *attr, cha
     struct device_private_data *dev_data;
     dev_data = dev_get_drvdata(dev);
 
-    dev_info(dev, "test: %d, %d, %d\n", dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
+    read_lock(&dev_data->data_rwlock);
+    dev_info(dev, "accel: %d, %d, %d\n", dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
+    read_unlock(&dev_data->data_rwlock);
 
     /* WIP */
     return 0;
@@ -99,7 +104,11 @@ static int device_thread(void *data)
     while (!kthread_should_stop())
     {
         msleep(1000);
-        dev_info(dev_data->device, "kthread running v2 :)\n");
+
+        write_lock(&dev_data->data_rwlock);
+        dev_data->acceleration[0]++;
+        dev_data->gyroscope[0]++;
+        write_unlock(&dev_data->data_rwlock);
     }
 
     return 0;
@@ -119,6 +128,8 @@ int device_probe(struct i2c_client *client, const struct i2c_device_id *id)
     }
     dev_data->i2c_client = client;
     i2c_set_clientdata(client, dev_data);
+
+    rwlock_init(&dev_data->data_rwlock);
 
     /* create device in /sys/class/mpu6050 */
     spin_lock(&driver_data.driver_data_lock);
