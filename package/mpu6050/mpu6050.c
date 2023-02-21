@@ -10,6 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/i2c.h>
 #include <linux/spinlock.h>
+#include <linux/delay.h>
 
 #include "mpu6050.h"
 
@@ -17,6 +18,7 @@
 
 static int device_probe(struct i2c_client *client, const struct i2c_device_id *id);
 static int device_remove(struct i2c_client *client);
+static int device_thread(void *data);
 
 /* operations for sysfs device */
 ssize_t gyroscope_show(struct device *dev, struct device_attribute *attr, char *buf);
@@ -71,7 +73,7 @@ ssize_t gyroscope_show(struct device *dev, struct device_attribute *attr, char *
     struct device_private_data *dev_data;
     dev_data = dev_get_drvdata(dev);
 
-    dev_info(dev, "test: %d, %d, %d\n",dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
+    dev_info(dev, "test: %d, %d, %d\n", dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
 
     /* WIP */
     return 0;
@@ -82,9 +84,24 @@ ssize_t acceleration_show(struct device *dev, struct device_attribute *attr, cha
     struct device_private_data *dev_data;
     dev_data = dev_get_drvdata(dev);
 
-    dev_info(dev, "test: %d, %d, %d\n",dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
+    dev_info(dev, "test: %d, %d, %d\n", dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
 
     /* WIP */
+    return 0;
+}
+
+static int device_thread(void *data)
+{
+    struct device_private_data *dev_data;
+
+    dev_data = (struct device_private_data *)data;
+
+    while (!kthread_should_stop())
+    {
+        msleep(1000);
+        dev_info(dev_data->device, "kthread running v2 :)\n");
+    }
+
     return 0;
 }
 
@@ -118,14 +135,23 @@ int device_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
     /* add attrs for this device */
     status = sysfs_create_group(&dev_data->device->kobj, &mpu6050_sysfs_attrs_group);
-    if(status)
+    if (status)
     {
         dev_err(&client->dev, "error while creating device attributes\n");
         device_destroy(driver_data.sysfs_class, dev_data->device->devt);
         return status;
     }
 
+    dev_data->device_thread = kthread_create(device_thread, dev_data, "mpu6050_kthread");
+    if (!dev_data->device_thread)
+    {
+        dev_err(&client->dev, "error while creating device thread\n");
+        return -ECHILD;
+    }
+
     dev_info(&client->dev, "mpu6050 probe finished\n");
+    wake_up_process(dev_data->device_thread);
+
     return 0;
 }
 
@@ -136,6 +162,7 @@ int device_remove(struct i2c_client *client)
     dev_info(&client->dev, "mpu6050 remove called\n");
     dev_data = i2c_get_clientdata(client);
 
+    kthread_stop(dev_data->device_thread);
     spin_lock(&driver_data.driver_data_lock);
     device_destroy(driver_data.sysfs_class, dev_data->device->devt);
     spin_unlock(&driver_data.driver_data_lock);
