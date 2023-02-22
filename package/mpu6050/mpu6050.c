@@ -23,6 +23,7 @@ static int device_thread(void *data);
 /* operations for sysfs device */
 ssize_t gyroscope_show(struct device *dev, struct device_attribute *attr, char *buf);
 ssize_t acceleration_show(struct device *dev, struct device_attribute *attr, char *buf);
+ssize_t probe_time_ms_show(struct device *dev, struct device_attribute *attr, char *buf);
 
 /* --------------------------- VARIABLES -------------------------- */
 
@@ -32,10 +33,13 @@ struct driver_private_data driver_data;
 static DEVICE_ATTR(gyroscope, S_IRUGO, gyroscope_show, NULL);
 /* dev_attr_acceleration */
 static DEVICE_ATTR(acceleration, S_IRUGO, acceleration_show, NULL);
+/* dev_attr_probe_time_ms*/
+static DEVICE_ATTR(probe_time_ms, S_IRUGO, probe_time_ms_show, NULL);
 
 struct attribute *mpu6050_sysfs_attrs[] = {
     &dev_attr_gyroscope.attr,
     &dev_attr_acceleration.attr,
+    &dev_attr_probe_time_ms.attr,
     NULL,
 };
 
@@ -70,44 +74,106 @@ struct i2c_driver mrmpu6050_platform_driver = {
 
 ssize_t gyroscope_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
+    int count;
     struct device_private_data *dev_data;
 
     dev_data = dev_get_drvdata(dev);
-
     read_lock(&dev_data->data_rwlock);
-    dev_info(dev, "gyro: %d, %d, %d\n", dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
+    count = sprintf(buf, "%d,%d,%d\n", dev_data->gyroscope[0], dev_data->gyroscope[1], dev_data->gyroscope[2]);
     read_unlock(&dev_data->data_rwlock);
-
-    /* WIP */
-    return 0;
+    return count;
 }
 
 ssize_t acceleration_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
+    int count;
     struct device_private_data *dev_data;
+
     dev_data = dev_get_drvdata(dev);
-
     read_lock(&dev_data->data_rwlock);
-    dev_info(dev, "accel: %d, %d, %d\n", dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
+    count = sprintf(buf, "%d,%d,%d\n", dev_data->acceleration[0], dev_data->acceleration[1], dev_data->acceleration[2]);
     read_unlock(&dev_data->data_rwlock);
+    return count;
+}
 
-    /* WIP */
-    return 0;
+ssize_t probe_time_ms_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", MPU6050_DEFAULT_SAMPLE_TIME_MS);
 }
 
 static int device_thread(void *data)
 {
+    int status;
+    u8 error_counter;
+    s32 tmp_a_x, tmp_a_y, tmp_a_z;
+    s32 tmp_g_x, tmp_g_y, tmp_g_z;
     struct device_private_data *dev_data;
 
     dev_data = (struct device_private_data *)data;
+    dev_data->operational = true;
+    error_counter = 0;
+    status = i2c_smbus_write_byte_data(dev_data->i2c_client, MPU6050_REG_ADDR_POWER_MGMT, MPU6050_REG_INIT_POWER_MGMT);
+    if (status)
+    {
+        dev_err(dev_data->device, "error while configuring device\n");
+        dev_data->operational = false;
+    }
 
+    status = i2c_smbus_write_byte_data(dev_data->i2c_client, MPU6050_REG_ADDR_GYRO_CFG, MPU6050_REG_INIT_GYRO_CFG);
+    if (status)
+    {
+        dev_err(dev_data->device, "error while configuring gyro feature\n");
+        dev_data->operational = false;
+    }
+    status = i2c_smbus_write_byte_data(dev_data->i2c_client, MPU6050_REG_ADDR_ACCEL_CFG, MPU6050_REG_INIT_ACCEL_CFG);
+    if (status)
+    {
+        dev_err(dev_data->device, "error while configuring accelerometer feature\n");
+        dev_data->operational = false;
+    }
     while (!kthread_should_stop())
     {
-        msleep(1000);
+        if (!dev_data->operational)
+        {
+            dev_err(dev_data->device, "MPU6050 is not working!\n");
+            return -ECOMM;
+        }
+        msleep(MPU6050_DEFAULT_SAMPLE_TIME_MS);
+
+        /* acceleration */
+        tmp_a_x = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_ACCEL_X);
+        tmp_a_y = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_ACCEL_Y);
+        tmp_a_z = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_ACCEL_Z);
+
+        if (IS_ERR_VALUE(tmp_a_x) || IS_ERR_VALUE(tmp_a_y) || IS_ERR_VALUE(tmp_a_z))
+            error_counter++;
+        else
+            error_counter = 0;
+
+        /* gyroscope */
+        tmp_g_x = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_GYRO_X);
+        tmp_g_y = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_GYRO_Y);
+        tmp_g_z = i2c_smbus_read_word_data(dev_data->i2c_client, MPU6050_REG_ADDR_GYRO_Z);
+
+        if (IS_ERR_VALUE(tmp_g_x) || IS_ERR_VALUE(tmp_g_y) || IS_ERR_VALUE(tmp_g_z))
+            error_counter++;
+        else
+            error_counter = 0;
+
+        if (error_counter == 10)
+        {
+            dev_data->operational = false;
+            continue;
+        }
 
         write_lock(&dev_data->data_rwlock);
-        dev_data->acceleration[0]++;
-        dev_data->gyroscope[0]++;
+        dev_data->acceleration[0] = be16_to_cpu(tmp_a_x);
+        dev_data->acceleration[1] = be16_to_cpu(tmp_a_y);
+        dev_data->acceleration[2] = be16_to_cpu(tmp_a_z);
+
+        dev_data->gyroscope[0] = be16_to_cpu(tmp_g_x);
+        dev_data->gyroscope[1] = be16_to_cpu(tmp_g_y);
+        dev_data->gyroscope[2] = be16_to_cpu(tmp_g_z);
         write_unlock(&dev_data->data_rwlock);
     }
 
@@ -173,7 +239,9 @@ int device_remove(struct i2c_client *client)
     dev_info(&client->dev, "mpu6050 remove called\n");
     dev_data = i2c_get_clientdata(client);
 
-    kthread_stop(dev_data->device_thread);
+    if (dev_data->operational)
+        kthread_stop(dev_data->device_thread);
+
     spin_lock(&driver_data.driver_data_lock);
     device_destroy(driver_data.sysfs_class, dev_data->device->devt);
     spin_unlock(&driver_data.driver_data_lock);
