@@ -198,17 +198,17 @@ int device_probe(struct i2c_client *client, const struct i2c_device_id *id)
     rwlock_init(&dev_data->data_rwlock);
 
     /* create device in /sys/class/mpu6050 */
-    spin_lock(&driver_data.driver_data_lock);
+    mutex_lock(&driver_data.data_mutex);
     dev_data->device = device_create(driver_data.sysfs_class, NULL, client->dev.devt, dev_data, "mpu6050_%d", driver_data.device_no);
     if (IS_ERR(dev_data->device))
     {
-        spin_unlock(&driver_data.driver_data_lock);
+        mutex_unlock(&driver_data.data_mutex);
         status = PTR_ERR(dev_data->device);
         dev_err(&client->dev, "error while creating device\n");
         return status;
     }
     driver_data.device_no++;
-    spin_unlock(&driver_data.driver_data_lock);
+    mutex_unlock(&driver_data.data_mutex);
 
     /* add attrs for this device */
     status = sysfs_create_group(&dev_data->device->kobj, &mpu6050_sysfs_attrs_group);
@@ -242,9 +242,9 @@ int device_remove(struct i2c_client *client)
     if (dev_data->operational)
         kthread_stop(dev_data->device_thread);
 
-    spin_lock(&driver_data.driver_data_lock);
+    mutex_lock(&driver_data.data_mutex);
     device_destroy(driver_data.sysfs_class, dev_data->device->devt);
-    spin_unlock(&driver_data.driver_data_lock);
+    mutex_unlock(&driver_data.data_mutex);
 
     dev_info(&client->dev, "mpu6050 removed\n");
 
@@ -256,7 +256,7 @@ static int __init mpu6050_driver_init(void)
     int status = 0;
 
     driver_data.device_no = 0;
-    spin_lock_init(&driver_data.driver_data_lock);
+    mutex_init(&driver_data.data_mutex);
 
     driver_data.sysfs_class = class_create(THIS_MODULE, "mpu6050");
     if (IS_ERR_OR_NULL(driver_data.sysfs_class))

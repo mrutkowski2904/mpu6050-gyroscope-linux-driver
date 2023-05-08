@@ -31,7 +31,7 @@
 
 struct driver_private_data
 {
-    spinlock_t driver_data_lock;
+    struct mutex data_mutex;
     struct class *sysfs_class;
     int device_no;
 };
